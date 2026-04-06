@@ -62,14 +62,6 @@ CONFIGURATION_DEFAULTS = {
 }
 CONFIGURATION = {}
 
-mimetypes = [
-    'audio/ogg',
-    'audio/mpeg',
-    'audio/x-mpeg',
-    'video/mp4',
-    'audio/x-m4a'
-]
-
 def print_err(err):
     print(Fore.RED + Style.BRIGHT + err +
           Fore.RESET + Back.RESET + Style.RESET_ALL, file=sys.stderr)
@@ -94,7 +86,7 @@ def get_filename_from_url(url):
 
 def episode_too_old(episode, maxage):
     now = datetime.datetime.utcnow()
-    dt_published = datetime.datetime.fromtimestamp(episode["published"])
+    dt_published = datetime.datetime.utcfromtimestamp(episode["published"])
     return maxage and (now - dt_published > datetime.timedelta(days=maxage))
 
 
@@ -104,51 +96,43 @@ def sort_feed(feed):
     return feed
 
 
+def _make_feed_folder(shortname):
+    folder = get_folder(shortname)
+    if os.path.exists(folder):
+        print_err('{} already exists'.format(folder))
+        exit(-1)
+    os.makedirs(folder)
+
+
 def import_feed(url, shortname=''):
     '''
     creates a folder for the new feed, and then inserts a new feed.json
     that will contain all the necessary information about this feed, and
     all the episodes contained.
     '''
-    # configuration for this feed, will be written to file.
     feed = {}
-    #get the feed.
     d = feedparser.parse(url)
 
-    if shortname:
-        folder = get_folder(shortname)
-        if os.path.exists(folder):
-            print_err(
-                '{} already exists'.format(folder))
-            exit(-1)
-        else:
-            os.makedirs(folder)
-    #if the user did not specify a folder name,
-    #we have to create one from the title
     if not shortname:
-        # the rss advertises a title, lets use that.
+        #if the user did not specify a folder name,
+        #we have to create one from the title
         if hasattr(d['feed'], 'title'):
+            # the rss advertises a title, lets use that.
             title = d['feed']['title']
-        # still no succes, lets use the last part of the url
         else:
+            # still no success, lets use the last part of the url
             title = url.rsplit('/', 1)[-1]
         # we wanna avoid any filename crazyness,
         # so foldernames will be restricted to lowercase ascii letters,
         # numbers, and dashes:
-        title = ''.join(ch for ch in title
-                if ch.isalnum() or ch == ' ')
+        title = ''.join(ch for ch in title if ch.isalnum() or ch == ' ')
         shortname = title.replace(' ', '-').lower()
         if not shortname:
             print_err('could not auto-deduce shortname.')
             print_err('please provide one explicitly.')
             exit(-1)
-        folder = get_folder(shortname)
-        if os.path.exists(folder):
-            print_err(
-                '{} already exists'.format(folder))
-            exit(-1)
-        else:
-            os.makedirs(folder)
+
+    _make_feed_folder(shortname)
     #we have succesfully generated a folder that we can store the files
     #in
     #trawl all the entries, and find links to audio files.
@@ -172,15 +156,11 @@ def update_feed(feed):
     episodes into our local config.
     '''
     d = feedparser.parse(feed['url'])
-    #only append new episodes!
+    existing = {(ep['published'], ep['title']) for ep in feed['episodes']}
     for episode in episodes_from_feed(d):
-        found = False
-        for old_episode in feed['episodes']:
-            if episode['published'] == old_episode['published'] \
-                    and episode['title'] == old_episode['title']:
-                found = True
-        if not found:
+        if (episode['published'], episode['title']) not in existing:
             feed['episodes'].append(episode)
+            existing.add((episode['published'], episode['title']))
             print('new episode.')
     feed = sort_feed(feed)
     overwrite_config(feed)
@@ -211,7 +191,7 @@ def episodes_from_feed(d):
             for link in entry.links:
                 if not hasattr(link, 'type'):
                     continue
-                if hasattr(link, 'type') and (link.type in mimetypes):
+                if link.type in mimetypes:
                     if hasattr(entry, 'title'):
                         episode_title = entry.title
                     else:
@@ -264,14 +244,15 @@ def download_single(folder, url, filename=""):
     r = requests.get(url.strip(), stream=True)
     if not filename:
         try:
-            filename=re.findall('filename="([^"]+)',r.headers['content-disposition'])[0]
-        except:
+            filename = re.findall('filename="([^"]+)', r.headers['content-disposition'])[0]
+        except (KeyError, IndexError):
             filename = get_filename_from_url(url)
     logging.info("{}: {:s} downloading".format(threading.current_thread().name, filename))
 
     try:
         with open(os.path.join(base, folder, filename), 'wb') as f:
-            pbar = tqdm(total=int(r.headers['Content-Length']), unit='B', unit_scale=True, unit_divisor=1024)
+            content_length = int(r.headers.get('Content-Length', 0))
+            pbar = tqdm(total=content_length or None, unit='B', unit_scale=True, unit_divisor=1024)
             pbar.set_description(filename if len(filename)<20 else filename[:20])
             for chunk in r.iter_content(chunk_size=1024**2):
                 f.write(chunk)
@@ -320,8 +301,8 @@ def rename(shortname, newname):
     if not os.path.isdir(folder):
         print_err('folder {0} not found'.format(folder))
         exit(-1)
-    os.rename(folder, new_folder)
     feed = find_feed(shortname)
+    os.rename(folder, new_folder)
     feed['shortname'] = newname
     overwrite_config(feed)
 
@@ -356,7 +337,7 @@ def pretty_print_feeds(feeds):
         format_str += Fore.BLUE + '  {3:40}' + Fore.RESET + Back.RESET
         feed = sort_feed(feed)
         amount = len([ep for ep in feed['episodes'] if ep['downloaded']])
-        dl = '' if feed['episodes'][0]['downloaded'] else '*'
+        dl = '' if not feed['episodes'] or feed['episodes'][0]['downloaded'] else '*'
         print(format_str.format(feed['title'], amount, dl, feed['shortname']))
 
 
@@ -447,6 +428,7 @@ def main():
             exit(0)
     if arguments['rename']:
         rename(arguments['<shortname>'], arguments['<newname>'])
+        exit(0)
 
     if arguments['prune']:
         if arguments['--maxage-days']:
