@@ -161,7 +161,7 @@ def update_feed(feed):
         if (episode['published'], episode['title']) not in existing:
             feed['episodes'].append(episode)
             existing.add((episode['published'], episode['title']))
-            print('new episode.')
+            print('new episode: {}'.format(episode['title']))
     feed = sort_feed(feed)
     overwrite_config(feed)
 
@@ -225,7 +225,7 @@ def download_multiple(feed, maxnum, rename):
                                             title, extension)
 
             
-            future_to_episodes[executor.submit(download_single, feed['shortname'], episode['url'], filename)]=episode
+            future_to_episodes[executor.submit(download_single, feed['shortname'], episode['url'], filename, episode['title'])]=episode
 
         for future in concurrent.futures.as_completed(future_to_episodes):
             episode = future_to_episodes[future]
@@ -238,7 +238,7 @@ def download_multiple(feed, maxnum, rename):
     overwrite_config(feed)
 
 
-def download_single(folder, url, filename=""):
+def download_single(folder, url, filename="", title=""):
     logging.info("{}: Parsing URL {}".format(threading.current_thread().name, url))
     base = CONFIGURATION['podcast-directory']
     r = requests.get(url.strip(), stream=True)
@@ -252,8 +252,9 @@ def download_single(folder, url, filename=""):
     try:
         with open(os.path.join(base, folder, filename), 'wb') as f:
             content_length = int(r.headers.get('Content-Length', 0))
+            print('Downloading: {}'.format(title or filename))
             pbar = tqdm(total=content_length or None, unit='B', unit_scale=True, unit_divisor=1024)
-            pbar.set_description(filename if len(filename)<20 else filename[:20])
+            pbar.set_description('progress')
             for chunk in r.iter_content(chunk_size=1024**2):
                 f.write(chunk)
                 pbar.update(len(chunk))
