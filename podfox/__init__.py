@@ -210,22 +210,21 @@ def download_multiple(feed, maxnum, rename):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         # parse up to maxnum of the not downloaded episodes
         future_to_episodes = {}
-        for episode in list(filter(lambda ep: not ep['downloaded'] and not episode_too_old(ep, CONFIGURATION['maxage-days']), feed['episodes']))[:maxnum]:
+        for position, episode in enumerate(list(filter(lambda ep: not ep['downloaded'] and not episode_too_old(ep, CONFIGURATION['maxage-days']), feed['episodes']))[:maxnum]):
             filename = ""
 
             if rename:
                 title = episode['title']
-                for c in '<>\"|*%?\\/': 
+                for c in '<>\"|*%?\\/':
                     title = title.replace(c, "")
-                title = title.replace(" ", "_").replace("’", "'").replace("—", "-").replace(":", ".")
+                title = title.replace(" ", "_").replace("‘", "'").replace("—", "-").replace(":", ".")
                 # Shorten the title to max 120 characters
                 title = title[:120]
                 extension = os.path.splitext(urlparse(episode['url'])[2])[1]
                 filename = "{}_{}{}".format(strftime('%Y-%m-%d', localtime(episode['published'])),
                                             title, extension)
 
-            
-            future_to_episodes[executor.submit(download_single, feed['shortname'], episode['url'], filename, episode['title'])]=episode
+            future_to_episodes[executor.submit(download_single, feed['shortname'], episode['url'], filename, episode['title'], position)]=episode
 
         for future in concurrent.futures.as_completed(future_to_episodes):
             episode = future_to_episodes[future]
@@ -238,7 +237,7 @@ def download_multiple(feed, maxnum, rename):
     overwrite_config(feed)
 
 
-def download_single(folder, url, filename="", title=""):
+def download_single(folder, url, filename="", title="", position=0):
     logging.info("{}: Parsing URL {}".format(threading.current_thread().name, url))
     base = CONFIGURATION['podcast-directory']
     r = requests.get(url.strip(), stream=True)
@@ -252,9 +251,10 @@ def download_single(folder, url, filename="", title=""):
     try:
         with open(os.path.join(base, folder, filename), 'wb') as f:
             content_length = int(r.headers.get('Content-Length', 0))
-            print('Downloading: {}'.format(title or filename))
-            pbar = tqdm(total=content_length or None, unit='B', unit_scale=True, unit_divisor=1024)
-            pbar.set_description('progress')
+            desc = title or filename
+            desc = desc if len(desc) <= 50 else desc[:47] + '...'
+            pbar = tqdm(total=content_length or None, unit='B', unit_scale=True, unit_divisor=1024, position=position, leave=True)
+            pbar.set_description(desc)
             for chunk in r.iter_content(chunk_size=1024**2):
                 f.write(chunk)
                 pbar.update(len(chunk))
